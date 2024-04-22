@@ -1,9 +1,25 @@
 import json
+import logging
+from random import randint
 from typing import Dict, Any, TextIO
 
 from _pytest.pathlib import Path
 
 import pytest
+import requests
+import time
+
+
+def send_report_to_dataset(url: str, token: str, report_json: dict) -> requests.Response:
+    headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+    }
+    add_events_url = f"{url}/services/collector/event"
+    response = requests.post(add_events_url, headers=headers, json=report_json)
+    response.raise_for_status()
+    return response
 
 
 def pytest_addoption(parser):
@@ -12,7 +28,7 @@ def pytest_addoption(parser):
         "--report-log",
         action="store",
         metavar="path",
-        default=None,
+        default="no.log",
         help="Path to line-based json objects of test session events.",
     )
     group.addoption(
@@ -21,6 +37,24 @@ def pytest_addoption(parser):
         default=False,
         help="Don't capture logs for passing tests",
     )
+    group.addoption(
+        "--report-log-dataset",
+        action="store_true",
+        default=False,
+        help="Send report json to DataSet instead of writing to file",
+    )
+    group.addoption(
+        "--report-log-dataset-url",
+        action="store",
+        default=None,
+        help="URL to DataSet API",
+    )
+    group.addoption(
+        "--report-log-dataset-token",
+        action="store",
+        default=None,
+        help="Token for DataSet API",
+    )
 
 
 def pytest_configure(config):
@@ -28,6 +62,14 @@ def pytest_configure(config):
     if report_log and not hasattr(config, "workerinput"):
         config._report_log_plugin = ReportLogPlugin(config, Path(report_log))
         config.pluginmanager.register(config._report_log_plugin)
+    if config.option.report_log_dataset:
+        config._report_log_dataset = True
+        config._report_log_plugin = ReportLogPlugin(config, Path(report_log))
+        config.pluginmanager.register(config._report_log_plugin)
+    if config.option.report_log_dataset_url:
+        config._report_log_dataset_url = config.option.report_log_dataset_url
+    if config.option.report_log_dataset_token:
+        config._report_log_dataset_token = config.option.report_log_dataset_token
 
 
 def pytest_unconfigure(config):
@@ -56,34 +98,45 @@ def _open_filtered_writer(log_path: Path) -> TextIO:
 
 
 class ReportLogPlugin:
-    def __init__(self, config, log_path: Path):
+    def __init__(self, config, log_path: Path = None):
         self._config = config
-        self._log_path = log_path
+        if log_path:
+            self._log_path = log_path
 
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        self._file = _open_filtered_writer(log_path)
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            self._file = _open_filtered_writer(log_path)
+        else:
+            self._file = None
+        self._unique_id = f"test_report_{time.time_ns()}_{randint(100000, 999999)}"
+        logging.info(f"Report log unique id: {self._unique_id}")
 
     def close(self):
         if self._file is not None:
             self._file.close()
             self._file = None
 
-    def _write_json_data(self, data):
+    def persist_data(self, data):
+        data["unique_id"] = self._unique_id
+        data["parser"] = "pytest-reportlog"
         try:
             json_data = json.dumps(data)
         except TypeError:
             data = cleanup_unserializable(data)
             json_data = json.dumps(data)
-        self._file.write(json_data + "\n")
-        self._file.flush()
+        if self._file != "no.log":
+            self._file.write(json_data + "\n")
+            self._file.flush()
+        if self._config._report_log_dataset:
+            send_report_to_dataset(
+                self._config._report_log_dataset_url, self._config._report_log_dataset_token, data)
 
     def pytest_sessionstart(self):
         data = {"pytest_version": pytest.__version__, "$report_type": "SessionStart"}
-        self._write_json_data(data)
+        self.persist_data(data)
 
     def pytest_sessionfinish(self, exitstatus):
         data = {"exitstatus": exitstatus, "$report_type": "SessionFinish"}
-        self._write_json_data(data)
+        self.persist_data(data)
 
     def pytest_runtest_logreport(self, report):
         data = self._config.hook.pytest_report_to_serializable(
@@ -104,7 +157,7 @@ class ReportLogPlugin:
                 ]
             ]
 
-        self._write_json_data(data)
+        self.persist_data(data)
 
     def pytest_warning_recorded(self, warning_message, when, nodeid, location):
         data = {
@@ -121,16 +174,19 @@ class ReportLogPlugin:
             "location": location,
         }
         data.update(extra_data)
-        self._write_json_data(data)
+        self.persist_data(data)
 
     def pytest_collectreport(self, report):
         data = self._config.hook.pytest_report_to_serializable(
             config=self._config, report=report
         )
-        self._write_json_data(data)
+        self.persist_data(data)
 
     def pytest_terminal_summary(self, terminalreporter):
-        terminalreporter.write_sep("-", f"generated report log file: {self._log_path}")
+        if self._file != "no.log":
+            terminalreporter.write_sep("-", f"generated report log file: {self._log_path}")
+        if self._config._report_log_dataset:
+            terminalreporter.write_sep("-", f"DataSet query to get generated test log events: unique_id='{self._unique_id}'")
 
 
 def cleanup_unserializable(d: Dict[str, Any]) -> Dict[str, Any]:
