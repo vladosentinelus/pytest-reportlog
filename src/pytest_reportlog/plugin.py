@@ -123,7 +123,7 @@ class ReportLogPlugin:
         except TypeError:
             data = cleanup_unserializable(data)
             json_data = json.dumps(data)
-        if self._file is not "no.log":
+        if self._file != "no.log":
             self._file.write(json_data + "\n")
             self._file.flush()
         if self._config._report_log_dataset:
@@ -183,7 +183,7 @@ class ReportLogPlugin:
         self.persist_data(data)
 
     def pytest_terminal_summary(self, terminalreporter):
-        if self._file is not "no.log":
+        if self._file != "no.log":
             terminalreporter.write_sep("-", f"generated report log file: {self._log_path}")
         if self._config._report_log_dataset:
             terminalreporter.write_sep("-", f"Generated test log events with unique id: {self._unique_id}")
