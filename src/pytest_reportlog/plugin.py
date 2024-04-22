@@ -16,7 +16,7 @@ def send_report_to_dataset(url: str, token: str, report_json: dict) -> requests.
             "Accept": "application/json",
             "Content-Type": "application/json",
     }
-    add_events_url = f"{url}/api/addEvents"
+    add_events_url = f"{url}/services/collector/event"
     response = requests.post(add_events_url, headers=headers, json=report_json)
     response.raise_for_status()
     return response
@@ -28,7 +28,7 @@ def pytest_addoption(parser):
         "--report-log",
         action="store",
         metavar="path",
-        default=None,
+        default="no.log",
         help="Path to line-based json objects of test session events.",
     )
     group.addoption(
@@ -64,6 +64,8 @@ def pytest_configure(config):
         config.pluginmanager.register(config._report_log_plugin)
     if config.option.report_log_dataset:
         config._report_log_dataset = True
+        config._report_log_plugin = ReportLogPlugin(config, Path(report_log))
+        config.pluginmanager.register(config._report_log_plugin)
     if config.option.report_log_dataset_url:
         config._report_log_dataset_url = config.option.report_log_dataset_url
     if config.option.report_log_dataset_token:
@@ -121,7 +123,7 @@ class ReportLogPlugin:
         except TypeError:
             data = cleanup_unserializable(data)
             json_data = json.dumps(data)
-        if self._file is not None:
+        if self._file is not "no.log":
             self._file.write(json_data + "\n")
             self._file.flush()
         if self._config._report_log_dataset:
@@ -181,7 +183,10 @@ class ReportLogPlugin:
         self.persist_data(data)
 
     def pytest_terminal_summary(self, terminalreporter):
-        terminalreporter.write_sep("-", f"generated report log file: {self._log_path}")
+        if self._file is not "no.log":
+            terminalreporter.write_sep("-", f"generated report log file: {self._log_path}")
+        if self._config._report_log_dataset:
+            terminalreporter.write_sep("-", f"Generated test log events with unique id: {self._unique_id}")
 
 
 def cleanup_unserializable(d: Dict[str, Any]) -> Dict[str, Any]:
