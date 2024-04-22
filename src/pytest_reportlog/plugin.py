@@ -186,7 +186,7 @@ class ReportLogPlugin:
         if self._file != "no.log":
             terminalreporter.write_sep("-", f"generated report log file: {self._log_path}")
         if self._config._report_log_dataset:
-            terminalreporter.write_sep("-", f"Generated test log events with unique id: {self._unique_id}")
+            terminalreporter.write_sep("-", f"DataSet query to get generated test log events: unique_id='{self._unique_id}'")
 
 
 def cleanup_unserializable(d: Dict[str, Any]) -> Dict[str, Any]:
